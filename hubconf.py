@@ -148,30 +148,41 @@ if __name__ == '__main__':
   import cv2
   import numpy as np
   import os
-
+  import sys
   model = torch.hub.load('yvanyin/metric3d', 'metric3d_vit_small', pretrain=True)
   model.cuda().eval()
-
-  root_path = "/home/zhaoyibin/3DRE/3DGS/FatesGS/DTU/diff/set_23_24_33/scan37/images"
-  output_dir = "/home/zhaoyibin/3DRE/3DGS/FatesGS/DTU/diff/set_23_24_33/scan37/normals"
+  root_path = sys.argv[1]
+  try:
+    xiangsu_scale = float(sys.argv[2])
+  except:
+    xiangsu_scale = 1
+  img_path = root_path + "/images"
+  output_normal_dir = root_path + "/normals"
+  output_depth_dir = root_path + "/depth_npy"
   #### prepare data
   # rgb_file = 'data/kitti_demo/rgb/0000000050.png'
   # rgb_file = '/home/zhaoyibin/3DRE/3DGS/FatesGS/DTU/diff/scan37/images/0000.png'
   # depth_file = 'data/kitti_demo/depth/0000000050.png'
   depth_file = None 
   # intrinsic = [707.0493, 707.0493, 604.0814, 180.5066]
-  intrinsic = [2892.329,2883.1799, 777,581]
+  if cv2.imread(os.path.join(img_path,os.listdir(img_path)[0])).shape[0] == 576:
+    intrinsic = [2892.329,2883.1799, 777,581]
+  else:
+    intrinsic = [639.956, 639.96, 385.67, 288.283]
   gt_depth_scale = 256.0
-  if not os.path.exists(output_dir):
-    os.mkdir(output_dir)
-  for img_name in os.listdir(root_path):
+  if not os.path.exists(output_normal_dir):
+    os.mkdir(output_normal_dir)
+  if not os.path.exists(output_depth_dir):
+    os.mkdir(output_depth_dir)
+  for img_name in os.listdir(img_path):
     print(f"Processing Image:{img_name}")
-    rgb_file = os.path.join(root_path,img_name)
+    rgb_file = os.path.join(img_path,img_name)
     rgb_origin = cv2.imread(rgb_file)[:, :, ::-1]
 
     #### ajust input size to fit pretrained model
     # keep ratio resize
-    input_size = (1162, 1554) # for vit model
+    
+    input_size = (cv2.imread(os.path.join(img_path,os.listdir(img_path)[0])).shape[0], cv2.imread(os.path.join(img_path,os.listdir(img_path)[0])).shape[1]) # for vit model
     # input_size = (544, 1216) # for convnext model
     h, w = rgb_origin.shape[:2]
     scale = min(input_size[0] / h, input_size[1] / w)
@@ -206,14 +217,16 @@ if __name__ == '__main__':
     pred_depth = pred_depth[pad_info[0] : pred_depth.shape[0] - pad_info[1], pad_info[2] : pred_depth.shape[1] - pad_info[3]]
     
     # upsample to original size
-    pred_depth = torch.nn.functional.interpolate(pred_depth[None, None, :, :], rgb_origin.shape[:2], mode='bilinear').squeeze()
+    pred_depth = torch.nn.functional.interpolate(pred_depth[None, None, :, :], (int(rgb_origin.shape[:2][0]//xiangsu_scale),int(rgb_origin.shape[:2][1]//xiangsu_scale)), mode='bilinear').squeeze()
     ###################### canonical camera space ######################
 
     #### de-canonical transform
     canonical_to_real_scale = intrinsic[0] / 1000.0 # 1000.0 is the focal length of canonical camera
     pred_depth = pred_depth * canonical_to_real_scale # now the depth is metric
     pred_depth = torch.clamp(pred_depth, 0, 300)
+    pred_depth_np = pred_depth.cpu().numpy()
 
+    np.save(f'{output_depth_dir}/{img_name.split(".")[0]}_pred', pred_depth_np)
     #### you can now do anything with the metric depth 
     # such as evaluate predicted depth
     if depth_file is not None:
@@ -237,5 +250,5 @@ if __name__ == '__main__':
       # such as visualize pred_normal
       pred_normal_vis = pred_normal.cpu().numpy().transpose((1, 2, 0))
       pred_normal_vis = (pred_normal_vis + 1) / 2
-      pred_normal_vis = cv2.resize(pred_normal_vis,(input_size[1],input_size[0]))
-      cv2.imwrite(f'{output_dir}/{img_name}', (pred_normal_vis * 255).astype(np.uint8))
+      pred_normal_vis = cv2.resize(pred_normal_vis,(int(input_size[1]//xiangsu_scale),int(input_size[0]//xiangsu_scale)))
+      cv2.imwrite(f'{output_normal_dir}/{img_name}', (pred_normal_vis * 255).astype(np.uint8))
